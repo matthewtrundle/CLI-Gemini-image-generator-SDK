@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Environment variables
+.env
+.env.local
+
+# Generated images (keep these local)
+generated/
+test_output/
+*.png
+*.jpg
+*.jpeg
+*.webp
+
+# Project specific
+.cache/
+*_memory.json
+demo_no_api.py
+test_sdk.py
+
+# Old TypeScript (archived)
+old_typescript/
+node_modules/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
