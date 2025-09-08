@@ -227,4 +227,4 @@ MIT License - Free to use and modify for your projects.
 
 ---
 
-Made with ❤️ by Matthew Trundle | Powered by AI 🚀
+Made with ❤️ by Matt | Powered by AI 🚀
