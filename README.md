@@ -178,6 +178,7 @@ Create a `.env` file:
 ```env
 GEMINI_API_KEY=your_openrouter_api_key
 OUTPUT_DIR=./generated
+ASPECT_RATIO=16:9
 IMAGE_QUALITY=90
 LOGGING_ENABLED=true
 ```
@@ -192,8 +193,7 @@ config = Config(
     output=OutputConfig(
         base_dir="./images",
         format="webp",
-        width=1920,
-        height=1080,
+        aspect_ratio="16:9",  # Options: 1:1, 16:9, 9:16, 4:3, 3:4, 21:9
         quality=95
     )
 )

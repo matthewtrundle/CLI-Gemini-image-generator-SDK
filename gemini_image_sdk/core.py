@@ -11,7 +11,16 @@ from PIL import Image
 from io import BytesIO
 
 from .config import Config
-from .types import GenerationResult, ImagePrompt, BatchConfig
+from .types import (
+    GenerationResult,
+    ImagePrompt,
+    BatchConfig,
+    APIError,
+    RateLimitError,
+    AuthenticationError,
+    InvalidRequestError,
+    ServerError
+)
 
 
 class ImageGenerator:
@@ -60,71 +69,126 @@ class ImageGenerator:
         
         payload = {
             "model": self.config.api.model,
-            "messages": [{"role": "user", "content": prompt}]
+            "messages": [{"role": "user", "content": prompt}],
+            "modalities": ["image", "text"]
         }
+
+        # Add aspect ratio configuration if specified
+        if self.config.output.aspect_ratio:
+            payload["image_config"] = {
+                "aspect_ratio": self.config.output.aspect_ratio
+            }
         
+        # Configure timeout
+        timeout = aiohttp.ClientTimeout(
+            total=self.config.rate_limit.timeout_seconds,
+            connect=10
+        )
+
         async with self._session.post(
             f"{self.config.api.base_url}/chat/completions",
             headers=headers,
-            json=payload
+            json=payload,
+            timeout=timeout
         ) as response:
-            if response.status != 200:
-                error_text = await response.text()
-                raise Exception(f"API Error ({response.status}): {error_text}")
-            
+            error_text = await response.text() if response.status != 200 else None
+
+            # Differentiated error handling based on status code
+            if response.status == 429:
+                raise RateLimitError(
+                    f"Rate limit exceeded: {error_text}",
+                    status_code=429
+                )
+            elif response.status == 401:
+                raise AuthenticationError(
+                    f"Authentication failed - check your API key: {error_text}",
+                    status_code=401
+                )
+            elif response.status == 403:
+                raise AuthenticationError(
+                    f"Access forbidden: {error_text}",
+                    status_code=403
+                )
+            elif response.status == 400:
+                raise InvalidRequestError(
+                    f"Invalid request: {error_text}",
+                    status_code=400
+                )
+            elif response.status >= 500:
+                raise ServerError(
+                    f"Server error ({response.status}): {error_text}",
+                    status_code=response.status
+                )
+            elif response.status != 200:
+                raise APIError(
+                    f"API Error ({response.status}): {error_text}",
+                    status_code=response.status
+                )
+
             data = await response.json()
             message = data.get("choices", [{}])[0].get("message", {})
-            
+
             if images := message.get("images"):
                 image_data = images[0].get("image_url", {}).get("url", "")
                 if image_data.startswith("data:image"):
                     return image_data
-            
-            raise Exception("No image data in response")
+
+            raise APIError("No image data in response")
     
     async def generate_with_retry(self, prompt: str) -> Optional[str]:
-        """Generate image with retry logic"""
+        """Generate image with exponential backoff retry logic"""
         last_error = None
-        
+
         for attempt in range(1, self.config.rate_limit.max_retries + 1):
             try:
-                if attempt > 1:
-                    await asyncio.sleep(self.config.rate_limit.retry_delay_ms / 1000)
-                
                 return await self._call_api(prompt)
-            except Exception as e:
+            except (AuthenticationError, InvalidRequestError) as e:
+                # Fail fast on permanent errors - no retry
+                if self.config.logging_enabled:
+                    print(f"Permanent error, not retrying: {e}")
+                raise
+            except (RateLimitError, ServerError, aiohttp.ClientError) as e:
+                # Retry on recoverable errors with exponential backoff
                 last_error = e
                 if self.config.logging_enabled:
-                    print(f"Attempt {attempt} failed: {e}")
-        
-        raise last_error or Exception("Failed to generate image")
+                    print(f"Attempt {attempt}/{self.config.rate_limit.max_retries} failed: {e}")
+
+                if attempt < self.config.rate_limit.max_retries:
+                    # Exponential backoff: 2^attempt seconds, capped at max_backoff_seconds
+                    delay = min(2 ** attempt, self.config.rate_limit.max_backoff_seconds)
+                    if self.config.logging_enabled:
+                        print(f"Retrying in {delay} seconds...")
+                    await asyncio.sleep(delay)
+            except Exception as e:
+                # Unexpected errors - retry with standard delay
+                last_error = e
+                if self.config.logging_enabled:
+                    print(f"Unexpected error on attempt {attempt}: {e}")
+
+                if attempt < self.config.rate_limit.max_retries:
+                    await asyncio.sleep(self.config.rate_limit.retry_delay_ms / 1000)
+
+        raise last_error or APIError("Failed to generate image after all retries")
     
     def _save_image(self, base64_data: str, output_path: str) -> str:
         """Save base64 image data to file"""
         # Remove data URL prefix
         if "," in base64_data:
             base64_data = base64_data.split(",")[1]
-        
+
         # Decode base64
         image_data = base64.b64decode(base64_data)
         image = Image.open(BytesIO(image_data))
-        
-        # Resize if needed
-        if image.size != (self.config.output.width, self.config.output.height):
-            image = image.resize(
-                (self.config.output.width, self.config.output.height),
-                Image.Resampling.LANCZOS
-            )
-        
+
         # Ensure output directory exists
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        
-        # Save as WebP or specified format
+
+        # Save as WebP or specified format (preserving original dimensions)
         if self.config.output.format == "webp":
             image.save(output_path, "WEBP", quality=self.config.output.quality)
         else:
             image.save(output_path, quality=self.config.output.quality)
-        
+
         return output_path
     
     async def generate_single(

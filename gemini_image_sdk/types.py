@@ -5,6 +5,39 @@ from dataclasses import dataclass
 from enum import Enum
 
 
+# Exception classes for better error handling
+class GeminiSDKError(Exception):
+    """Base exception for all SDK errors"""
+    pass
+
+
+class APIError(GeminiSDKError):
+    """Generic API error"""
+    def __init__(self, message: str, status_code: Optional[int] = None):
+        self.status_code = status_code
+        super().__init__(message)
+
+
+class RateLimitError(APIError):
+    """Raised when rate limit is exceeded (429)"""
+    pass
+
+
+class AuthenticationError(APIError):
+    """Raised when authentication fails (401, 403)"""
+    pass
+
+
+class InvalidRequestError(APIError):
+    """Raised when request is invalid (400)"""
+    pass
+
+
+class ServerError(APIError):
+    """Raised when server error occurs (500+)"""
+    pass
+
+
 class GenerationStatus(Enum):
     """Status of image generation"""
     PENDING = "pending"
